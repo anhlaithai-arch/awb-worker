@@ -4,7 +4,16 @@ const BASE='https://spx.shopee.vn';
 const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 export default {
   async fetch(request, env) {
-    if(request.method==='GET') return reply({ok:true,version:'awb-sheet-ai-2.0.0'});
+    if(request.method==='GET') return reply({
+      ok:true,
+      version:'awb-sheet-ai-2.0.1-config-check',
+      config:{
+        worker_api_key_present:typeof env?.WORKER_API_KEY==='string' && env.WORKER_API_KEY.length>0,
+        worker_api_key_length:typeof env?.WORKER_API_KEY==='string' ? env.WORKER_API_KEY.length : 0,
+        worker_api_key_valid:typeof env?.WORKER_API_KEY==='string' && env.WORKER_API_KEY.length>=24,
+        google_service_account_present:typeof env?.GOOGLE_SERVICE_ACCOUNT_JSON==='string' && env.GOOGLE_SERVICE_ACCOUNT_JSON.length>0
+      }
+    });
     if(request.method!=='POST') return reply({ok:false,error:'Chỉ hỗ trợ POST.'},405);
     let task,debug=false;
     try {
