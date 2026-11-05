@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "awb-worker",
+  "main": "dist/index.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "DATA_SHEET_ID": "19iJGccjb-EplvSOGF6Axo9gJUfQ03gMXEize_o4Kef4",
+    "DATA_SHEET_NAME": "Hub name",
+    "SHEET_CACHE_SECONDS": "30"
+  }
+}
