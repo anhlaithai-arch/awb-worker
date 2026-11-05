@@ -6,12 +6,12 @@ export default {
   async fetch(request, env) {
     if(request.method==='GET') return reply({
       ok:true,
-      version:'awb-sheet-ai-2.1.0-sheet-tool',
+      version:'awb-ai-3.0.0-parse-gas',
       config:{
         worker_api_key_present:typeof env?.WORKER_API_KEY==='string' && env.WORKER_API_KEY.length>0,
         worker_api_key_length:typeof env?.WORKER_API_KEY==='string' ? env.WORKER_API_KEY.length : 0,
         worker_api_key_valid:typeof env?.WORKER_API_KEY==='string' && env.WORKER_API_KEY.length>=24,
-        google_service_account_present:typeof env?.GOOGLE_SERVICE_ACCOUNT_JSON==='string' && env.GOOGLE_SERVICE_ACCOUNT_JSON.length>0
+        sheet_reader:'GAS'
       }
     });
     if(request.method!=='POST') return reply({ok:false,error:'Chỉ hỗ trợ POST.'},405);
@@ -19,7 +19,7 @@ export default {
     try {
       let body;
       try {body=await request.json();}catch{return reply({ok:false,error:'Body phải là JSON.'},400);}
-      if (['address_lookup','sheet_test'].includes(body?.action)) return handleSheetAction(request,body,env);
+      if (['address_parse','address_lookup','sheet_test'].includes(body?.action)) return handleSheetAction(request,body,env);
       if (body?.action === 'ai_test') {
         if (!env || !env.AI) return reply({ok:false,error:'Chưa có Workers AI binding tên AI.'},400);
         try {
