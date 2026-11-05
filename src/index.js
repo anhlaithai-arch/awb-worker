@@ -24,7 +24,6 @@ export default {
     const page = await pdf.getPage(1);
     const content = await page.getTextContent();
 
-    // Dữ liệu gốc: từng mảnh chữ kèm tọa độ (PDF: y càng lớn càng ở trên)
     const items = content.items
       .filter(it => it.str && it.str.trim() !== '')
       .map(it => ({
@@ -34,77 +33,85 @@ export default {
         w: Math.round((it.width || 0) * 10) / 10
       }));
 
+    // Gom mảnh thành dòng: cùng y (dung sai 2), sắp theo x
+    const rows = groupRows(items);
+
     const result = {
       ok: true,
-      awb: pickAwb(items),
-      sort_line: pickSortLine(items),
-      sender: pickBlock(items, 'sender'),
-      receiver: pickBlock(items, 'receiver')
+      awb: pickAwb(rows),
+      sort_line: pickSortLine(rows),
+      sender: pickBlock(rows, /^từ\s*:/i, 'left'),
+      receiver: pickBlock(rows, /^đến\s*:/i, 'right')
     };
-    if (body.debug) result.items = items;   // gửi debug:true để xem toàn bộ tọa độ
+    if (body.debug) result.rows = rows.map(r => `y=${r.y} x=${r.x} | ${r.text}`);
 
     return Response.json(result);
   }
 };
 
-function pickAwb(items) {
-  for (const it of items) {
-    const m = it.str.match(/SPXVN\w+/);
+function groupRows(items) {
+  const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
+  const rows = [];
+  for (const it of sorted) {
+    const row = rows.find(r => Math.abs(r.y - it.y) <= 2);
+    if (row) row.items.push(it);
+    else rows.push({ y: it.y, items: [it] });
+  }
+  return rows.map(r => {
+    const s = r.items.sort((a, b) => a.x - b.x);
+    let text = '';
+    for (let i = 0; i < s.length; i++) {
+      if (i > 0) {
+        const gap = s[i].x - (s[i - 1].x + s[i - 1].w);
+        if (gap > 1.2) text += ' ';
+      }
+      text += s[i].str;
+    }
+    return { y: r.y, x: s[0].x, text: text.replace(/\s+/g, ' ').trim(), items: s };
+  }).sort((a, b) => b.y - a.y);
+}
+
+function pickAwb(rows) {
+  for (const r of rows) {
+    const m = r.text.match(/SPXVN\w+/);
     if (m) return m[0];
   }
   return '';
 }
 
-function pickSortLine(items) {
-  const a = items.find(it => /^[A-Z]{2}-\d{2}-\d{2}-/.test(it.str.trim()));
-  if (!a) return '';
-  // gộp các mảnh cùng hàng (vd "MB-22-07-TT10-N" + "DV - Huy")
-  return joinLine(items.filter(it => Math.abs(it.y - a.y) <= 4 && it.x >= a.x - 2));
+// Mã phân loại lớn: dòng nằm ngay dưới mã vạch, có dạng XX-dd-dd-... và đứng ở nửa trên nhãn
+function pickSortLine(rows) {
+  const tu = rows.find(r => /^từ\s*:/i.test(r.text));
+  const top = tu ? tu.y : 0;
+  const cands = rows.filter(r => r.y > top && /^[A-Z]{2}-\d{2}-\d{2}/.test(r.text));
+  return cands.length ? cands[0].text : '';
 }
 
-// Gom mảnh chữ thành các dòng theo y, trong mỗi dòng sắp theo x
-function toLines(arr) {
-  const sorted = [...arr].sort((p, q) => q.y - p.y || p.x - q.x);
+// Lấy khối dưới dòng tiêu đề ("Từ:" hoặc "Đến:") theo cột x, dừng ở dòng "***"
+function pickBlock(rows, reTitle, side) {
+  const tu = rows.find(r => /^từ\s*:/i.test(r.text));
+  const den = rows.find(r => /^đến\s*:/i.test(r.text));
+  const title = side === 'left' ? tu : den;
+  if (!title) return '';
+
+  const stop = rows.find(r => /^\*\*\*/.test(r.text) && r.y < title.y);
+  const bottom = stop ? stop.y : 0;
+
+  const xMin = title.x - 2;
+  const xMax = side === 'left' && den ? den.x - 2 : Infinity;
+
   const lines = [];
-  for (const it of sorted) {
-    const last = lines[lines.length - 1];
-    if (last && Math.abs(last.y - it.y) <= 3) last.items.push(it);
-    else lines.push({ y: it.y, items: [it] });
-  }
-  return lines.map(l => joinLine(l.items));
-}
-
-function joinLine(arr) {
-  const s = [...arr].sort((p, q) => p.x - q.x);
-  let out = '';
-  for (let i = 0; i < s.length; i++) {
-    if (i > 0) {
-      const gap = s[i].x - (s[i - 1].x + s[i - 1].w);
-      if (gap > 1.5) out += ' ';
+  for (const r of rows) {
+    if (r === title || r.y >= title.y - 1 || r.y <= bottom + 1) continue;
+    const part = r.items.filter(it => it.x >= xMin && it.x < xMax);
+    if (!part.length) continue;
+    let text = '';
+    for (let i = 0; i < part.length; i++) {
+      if (i > 0 && part[i].x - (part[i - 1].x + part[i - 1].w) > 1.2) text += ' ';
+      text += part[i].str;
     }
-    out += s[i].str;
+    text = text.replace(/\s+/g, ' ').trim();
+    if (text) lines.push(text);
   }
-  return out.replace(/\s+/g, ' ').trim();
-}
-
-// Khối "Từ:" (bên trái) và "Đến:" (bên phải): lọc theo vị trí
-function pickBlock(items, which) {
-  const tu = items.find(it => /^từ\s*:?$/i.test(it.str.trim()));
-  const den = items.find(it => /^đến\s*:?$/i.test(it.str.trim()));
-  const stop = items.find(it => /^\*\*\*/.test(it.str.trim()));
-  const noiDung = items.find(it => /^nội dung hàng/i.test(it.str.trim()));
-  const anchor = which === 'sender' ? tu : den;
-  if (!anchor) return '';
-
-  const bottom = stop ? stop.y : (noiDung ? noiDung.y : 0);
-  const xMin = anchor.x - 2;
-  const xMax = which === 'sender' && den ? den.x - 2 : Infinity;
-
-  const picked = items.filter(it =>
-    it !== anchor &&
-    it.x >= xMin && it.x < xMax &&
-    it.y < anchor.y - 1 &&
-    it.y > bottom + 1
-  );
-  return toLines(picked).join('\n');
+  return lines.join('\n');
 }
