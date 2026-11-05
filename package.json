@@ -1,0 +1,21 @@
+{
+  "name": "spx-awb-text-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "deploy": "npm run build && wrangler deploy --no-bundle",
+    "dev": "npm run build && wrangler dev --no-bundle"
+  },
+  "dependencies": {
+    "unpdf": "2.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "wrangler": "4.157.0"
+  }
+}
