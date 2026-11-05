@@ -12,11 +12,11 @@ export default {
       if (body?.action === 'ai_test') {
         if (!env || !env.AI) return reply({ok:false,error:'Chưa có Workers AI binding tên AI.'},400);
         try {
-          const answer = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+          const answer = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fp8', {
             messages:[{role:'user',content:'Reply with exactly one word: OK'}],
             max_tokens:16
           });
-          return reply({ok:true,action:'ai_test',model:'@cf/meta/llama-3.1-8b-instruct',response:answer.response || answer});
+          return reply({ok:true,action:'ai_test',model:'@cf/meta/llama-3.1-8b-instruct-fp8',response:answer.response || answer});
         } catch (error) {
           return reply({ok:false,error:'Workers AI test lỗi: ' + String(error.message || error).slice(0,700)},502);
         }
