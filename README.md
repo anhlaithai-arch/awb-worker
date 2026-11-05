@@ -1,2 +1,0 @@
-# awb-worker
-đọc pfd
