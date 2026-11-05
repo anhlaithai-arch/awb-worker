@@ -6,7 +6,7 @@ export default {
   async fetch(request, env) {
     if(request.method==='GET') return reply({
       ok:true,
-      version:'awb-sheet-ai-2.0.2-json-schema',
+      version:'awb-sheet-ai-2.1.0-sheet-tool',
       config:{
         worker_api_key_present:typeof env?.WORKER_API_KEY==='string' && env.WORKER_API_KEY.length>0,
         worker_api_key_length:typeof env?.WORKER_API_KEY==='string' ? env.WORKER_API_KEY.length : 0,
