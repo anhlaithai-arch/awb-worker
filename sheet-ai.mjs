@@ -96,6 +96,15 @@ async function lookupSheetAddress(body,env){
   if(!parsed.ward) return empty('AI không thấy tên xã/phường trong địa chỉ. Cần kiểm tra thủ công.',source,{aiParsed:parsed});
   // Xã/phường không có trong địa chỉ gốc = AI tự bịa -> không dùng.
   if(!containsName(address,parsed.ward)) return empty('AI đề xuất xã/phường không xuất hiện trong địa chỉ gốc. Cần kiểm tra thủ công.',source,{aiParsed:parsed});
+  // Làm sạch đầu ra AI: tên đường không phải thôn/xóm; tỉnh phải là tên có trong Sheet; huyện trùng tỉnh thì bỏ.
+  if(!/^(thôn|xóm|ấp|tổ|khu phố|khu dân cư|làng)\s/i.test(parsed.locality)) parsed.locality='';
+  const provinces=[...new Set(rows.flatMap(r=>[r.tinhMoi,r.tinh]).filter(Boolean))];
+  const alias={hcm:'ho chi minh',tphcm:'ho chi minh',hn:'ha noi'};
+  const pkey=v=>{const n=exactAdminName_(v);return alias[n]||n;};
+  let province=provinces.find(pn=>pkey(pn)===pkey(parsed.province));
+  if(!province){const hits=provinces.filter(pn=>containsName(address,pn));if(new Set(hits.map(pkey)).size===1)province=hits[0];}
+  if(province) parsed.province=province;
+  if(parsed.district&&pkey(parsed.district)===pkey(parsed.province)) parsed.district='';
   const inferred=['district','province'].filter(k=>parsed[k]&&!containsName(address,parsed[k]));
   // 2) Code tìm trong Sheet theo địa chỉ AI đã chuẩn hóa; nới dần, mỗi mức vẫn đối chiếu chặt.
   const join=(...p)=>p.filter(Boolean).join(', ');
