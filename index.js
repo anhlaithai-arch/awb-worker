@@ -3,7 +3,7 @@ const BASE='https://spx.shopee.vn';
 const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 export default {
   async fetch(request) {
-    if(request.method==='GET') return reply({ok:true,version:'receiver-columns-1.1.0'});
+    if(request.method==='GET') return reply({ok:true,version:'receiver-columns-1.1.1'});
     if(request.method!=='POST') return reply({ok:false,error:'Chỉ hỗ trợ POST.'},405);
     let task,debug=false;
     try {
@@ -67,6 +67,7 @@ function findTitle(rows, word) {
   const pattern=new RegExp('^'+word+'\\s*:$');
   for(const row of rows) {
     for(let i=0;i<row.items.length;i++) {
+      if (!row.items[i].str.trim()) continue; // Anchor must start at visible ink, never whitespace.
       for(let j=i;j<Math.min(row.items.length,i+8);j++) {
         const part=row.items.slice(i,j+1);
         if(pattern.test(fold(joinLine(part)))) return {x:part[0].x,y:row.y};
@@ -97,7 +98,7 @@ function parseLabel(items) {
   const blocks=pickBlocks(rows);
   const awb=rows.map(r=>r.text.match(/SPXVN[A-Z0-9]+/i)?.[0]).find(Boolean)||'';
   const title=findTitle(rows,'tu');
-  const sort=rows.find(r=>r.y>title.y && /^[A-Z]{2}-\d{2}-\d{2}/.test(r.text));
+  const sort=rows.find(r=>r.y>title.y && /^[A-Z]{2,4}\d*-\d{2}-\d{2}/.test(r.text));
   const lines=blocks.receiver.split('\n');
   const combined=lines.join(' ');
   const marker=/\bDchi\b|Địa\s+chỉ\s*:/i.exec(combined);
