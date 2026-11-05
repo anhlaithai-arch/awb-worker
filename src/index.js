@@ -1,117 +1,108 @@
-import { getDocumentProxy } from 'unpdf';
-
-const ALLOWED_PREFIX = 'https://spx.shopee.vn/api/awb_print/label/print?';
-
+import { getDocument } from 'unpdf/pdfjs';
+const BASE='https://spx.shopee.vn';
+const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 export default {
   async fetch(request) {
-    if (request.method !== 'POST') {
-      return new Response('Method not allowed', { status: 405 });
-    }
-
-    let body;
-    try { body = await request.json(); }
-    catch (e) { return new Response('Body không phải JSON', { status: 400 }); }
-
-    const awbUrl = body.awb_url;
-    if (!awbUrl || !awbUrl.startsWith(ALLOWED_PREFIX)) {
-      return new Response('URL không hợp lệ', { status: 400 });
-    }
-
-    const r = await fetch(awbUrl, { headers: { Referer: 'https://spx.shopee.vn/' } });
-    if (!r.ok) return new Response('SPX trả ' + r.status, { status: 502 });
-
-    const pdf = await getDocumentProxy(new Uint8Array(await r.arrayBuffer()));
-    const page = await pdf.getPage(1);
-    const content = await page.getTextContent();
-
-    const items = content.items
-      .filter(it => it.str && it.str.trim() !== '')
-      .map(it => ({
-        str: it.str,
-        x: Math.round(it.transform[4] * 10) / 10,
-        y: Math.round(it.transform[5] * 10) / 10,
-        w: Math.round((it.width || 0) * 10) / 10
-      }));
-
-    // Gom mảnh thành dòng: cùng y (dung sai 2), sắp theo x
-    const rows = groupRows(items);
-
-    const result = {
-      ok: true,
-      awb: pickAwb(rows),
-      sort_line: pickSortLine(rows),
-      sender: pickBlock(rows, /^từ\s*:/i, 'left'),
-      receiver: pickBlock(rows, /^đến\s*:/i, 'right')
-    };
-    if (body.debug) result.rows = rows.map(r => `y=${r.y} x=${r.x} | ${r.text}`);
-
-    return Response.json(result);
+    if(request.method==='GET') return reply({ok:true,version:'receiver-columns-1.1.0'});
+    if(request.method!=='POST') return reply({ok:false,error:'Chỉ hỗ trợ POST.'},405);
+    let task,debug=false;
+    try {
+      let body;
+      try {body=await request.json();}catch{return reply({ok:false,error:'Body phải là JSON.'},400);}
+      debug=body?.debug===true;
+      let url;
+      try {url=new URL(body?.awb_url);}catch{return reply({ok:false,error:'Thiếu awb_url hợp lệ.'},400);}
+      if(url.origin!==BASE || url.pathname!=='/api/awb_print/label/print' || !url.searchParams.has('token_str')) {
+        return reply({ok:false,error:'Chỉ nhận link nhãn AWB của SPX.'},400);
+      }
+      const res=await fetch(url.href,{redirect:'manual',signal:AbortSignal.timeout(25000)});
+      if(!res.ok) {await res.body?.cancel();return reply({ok:false,error:'AWB HTTP '+res.status},502);}
+      if(!res.body) throw new Error('PDF rỗng.');
+      const reader=res.body.getReader(),chunks=[];let size=0;
+      try {while(true){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>3*1024*1024){await reader.cancel();throw new Error('PDF vượt 3 MB.');}chunks.push(value);}}
+      finally{reader.releaseLock();}
+      const bytes=new Uint8Array(size);let offset=0;
+      for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+      if(new TextDecoder().decode(bytes.subarray(0,5))!=='%PDF-') throw new Error('Link không trả PDF.');
+      task=getDocument({data:bytes,isEvalSupported:false,disableFontFace:true,useSystemFonts:false,useWorkerFetch:false,verbosity:0,maxImageSize:16777216});
+      const pdf=await task.promise;
+      if(pdf.numPages!==1) throw new Error('Bản này chỉ xử lý nhãn một trang.');
+      const page=await pdf.getPage(1),content=await page.getTextContent();
+      // Keep whitespace fragments to preserve spaces between Vietnamese words.
+      const items=content.items.filter(it=>typeof it.str==='string' && it.str.length).map(it=>({str:it.str,x:it.transform[4],y:it.transform[5],w:it.width||0}));
+      let parsed;
+      try{parsed=parseLabel(items);}catch(error){return reply({ok:false,error:error.message,...(debug?{items,rows:groupRows(items).map(r=>({y:r.y,text:r.text}))}:{})},422);}
+      const {rows,...result}=parsed;
+      return reply({ok:true,...result,...(debug?{items,rows:rows.map(r=>({y:r.y,text:r.text}))}:{})});
+    }catch{return reply({ok:false,error:'Không tải hoặc giải mã được PDF AWB.'},502);}
+    finally{if(task)await task.destroy();}
   }
 };
 
-function groupRows(items) {
-  const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
-  const rows = [];
+function fold(s) {
+  return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g,'d').replace(/Đ/g,'D').toLowerCase();
+}
+function joinLine(items) {
+  const sorted = [...items].sort((a,b)=>a.x-b.x);
+  let text='', end=-Infinity;
   for (const it of sorted) {
-    const row = rows.find(r => Math.abs(r.y - it.y) <= 2);
-    if (row) row.items.push(it);
-    else rows.push({ y: it.y, items: [it] });
+    if (text && it.x-end>1.2 && !/\s$/.test(text) && !/^\s/.test(it.str)) text+=' ';
+    text+=it.str;
+    end=Math.max(end,it.x+it.w);
   }
-  return rows.map(r => {
-    const s = r.items.sort((a, b) => a.x - b.x);
-    let text = '';
-    for (let i = 0; i < s.length; i++) {
-      if (i > 0) {
-        const gap = s[i].x - (s[i - 1].x + s[i - 1].w);
-        if (gap > 1.2) text += ' ';
+  return text.replace(/\s+/g,' ').trim();
+}
+function groupRows(items) {
+  const rows=[];
+  for(const it of [...items].sort((a,b)=>b.y-a.y || a.x-b.x)) {
+    let row=rows.find(r=>Math.abs(r.y-it.y)<=2);
+    if(!row) {row={y:it.y,items:[]};rows.push(row);}
+    row.items.push(it);
+  }
+  return rows.map(r=>({...r,items:r.items.sort((a,b)=>a.x-b.x),text:joinLine(r.items)})).sort((a,b)=>b.y-a.y);
+}
+function findTitle(rows, word) {
+  // Look inside each row: a row can contain BOTH Từ: and Đến:.
+  // Test neighboring fragments too, since Vietnamese glyphs may be split.
+  const pattern=new RegExp('^'+word+'\\s*:$');
+  for(const row of rows) {
+    for(let i=0;i<row.items.length;i++) {
+      for(let j=i;j<Math.min(row.items.length,i+8);j++) {
+        const part=row.items.slice(i,j+1);
+        if(pattern.test(fold(joinLine(part)))) return {x:part[0].x,y:row.y};
       }
-      text += s[i].str;
     }
-    return { y: r.y, x: s[0].x, text: text.replace(/\s+/g, ' ').trim(), items: s };
-  }).sort((a, b) => b.y - a.y);
-}
-
-function pickAwb(rows) {
-  for (const r of rows) {
-    const m = r.text.match(/SPXVN\w+/);
-    if (m) return m[0];
   }
-  return '';
+  return null;
 }
-
-// Mã phân loại lớn: dòng nằm ngay dưới mã vạch, có dạng XX-dd-dd-... và đứng ở nửa trên nhãn
-function pickSortLine(rows) {
-  const tu = rows.find(r => /^từ\s*:/i.test(r.text));
-  const top = tu ? tu.y : 0;
-  const cands = rows.filter(r => r.y > top && /^[A-Z]{2}-\d{2}-\d{2}/.test(r.text));
-  return cands.length ? cands[0].text : '';
-}
-
-// Lấy khối dưới dòng tiêu đề ("Từ:" hoặc "Đến:") theo cột x, dừng ở dòng "***"
-function pickBlock(rows, reTitle, side) {
-  const tu = rows.find(r => /^từ\s*:/i.test(r.text));
-  const den = rows.find(r => /^đến\s*:/i.test(r.text));
-  const title = side === 'left' ? tu : den;
-  if (!title) return '';
-
-  const stop = rows.find(r => /^\*\*\*/.test(r.text) && r.y < title.y);
-  const bottom = stop ? stop.y : 0;
-
-  const xMin = title.x - 2;
-  const xMax = side === 'left' && den ? den.x - 2 : Infinity;
-
-  const lines = [];
-  for (const r of rows) {
-    if (r === title || r.y >= title.y - 1 || r.y <= bottom + 1) continue;
-    const part = r.items.filter(it => it.x >= xMin && it.x < xMax);
-    if (!part.length) continue;
-    let text = '';
-    for (let i = 0; i < part.length; i++) {
-      if (i > 0 && part[i].x - (part[i - 1].x + part[i - 1].w) > 1.2) text += ' ';
-      text += part[i].str;
-    }
-    text = text.replace(/\s+/g, ' ').trim();
-    if (text) lines.push(text);
+function pickBlocks(rows) {
+  const senderTitle=findTitle(rows,'tu'), receiverTitle=findTitle(rows,'den');
+  if(!senderTitle || !receiverTitle || Math.abs(senderTitle.y-receiverTitle.y)>5 || receiverTitle.x<=senderTitle.x) {
+    throw new Error('Không xác định được hai cột Từ/Đến.');
   }
-  return lines.join('\n');
+  const stops=rows.filter(r=>r.y<receiverTitle.y-3 &&
+    (/^\s*\*{3}/.test(r.text) || /^noi\s*dung\s*hang/.test(fold(r.text))));
+  if(!stops.length) throw new Error('Không xác định được cuối vùng người nhận.');
+  const bottom=stops[0].y;
+  const cut=(anchor,left,right)=>rows.filter(r=>r.y<anchor.y-2 && r.y>bottom+1)
+    .map(r=>joinLine(r.items.filter(it=>it.x>=left && it.x<right)))
+    .filter(Boolean).join('\n');
+  const sender=cut(senderTitle,senderTitle.x-2,receiverTitle.x-2);
+  const receiver=cut(receiverTitle,receiverTitle.x-2,Infinity);
+  if(!receiver) throw new Error('Vùng Đến không có text.');
+  return {sender,receiver};
+}
+function parseLabel(items) {
+  const rows=groupRows(items);
+  const blocks=pickBlocks(rows);
+  const awb=rows.map(r=>r.text.match(/SPXVN[A-Z0-9]+/i)?.[0]).find(Boolean)||'';
+  const title=findTitle(rows,'tu');
+  const sort=rows.find(r=>r.y>title.y && /^[A-Z]{2}-\d{2}-\d{2}/.test(r.text));
+  const lines=blocks.receiver.split('\n');
+  const combined=lines.join(' ');
+  const marker=/\bDchi\b|Địa\s+chỉ\s*:/i.exec(combined);
+  // For ordinary labels the first recipient line is the name.
+  const name=marker?combined.slice(0,marker.index).trim():lines[0];
+  const address=marker?combined.slice(marker.index).trim():lines.slice(1).join(' ').trim();
+  return {awb,sort_line:sort?.text||'',...blocks,recipient_name:name,address,rows};
 }
