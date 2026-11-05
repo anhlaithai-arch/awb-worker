@@ -2,13 +2,25 @@ import { getDocument } from 'unpdf/pdfjs';
 const BASE='https://spx.shopee.vn';
 const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     if(request.method==='GET') return reply({ok:true,version:'receiver-columns-1.1.1'});
     if(request.method!=='POST') return reply({ok:false,error:'Chỉ hỗ trợ POST.'},405);
     let task,debug=false;
     try {
       let body;
       try {body=await request.json();}catch{return reply({ok:false,error:'Body phải là JSON.'},400);}
+      if (body?.action === 'ai_test') {
+        if (!env || !env.AI) return reply({ok:false,error:'Chưa có Workers AI binding tên AI.'},400);
+        try {
+          const answer = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+            messages:[{role:'user',content:'Reply with exactly one word: OK'}],
+            max_tokens:16
+          });
+          return reply({ok:true,action:'ai_test',model:'@cf/meta/llama-3.1-8b-instruct',response:answer.response || answer});
+        } catch (error) {
+          return reply({ok:false,error:'Workers AI test lỗi: ' + String(error.message || error).slice(0,700)},502);
+        }
+      }
       debug=body?.debug===true;
       let url;
       try {url=new URL(body?.awb_url);}catch{return reply({ok:false,error:'Thiếu awb_url hợp lệ.'},400);}
